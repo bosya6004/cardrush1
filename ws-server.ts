@@ -1,4 +1,4 @@
-// Load env for this standalone Node process
+// Load env for this standalone Node process (local dev)
 import { config as dotenvConfig } from "dotenv";
 dotenvConfig({ path: ".env.local" });
 
@@ -6,27 +6,41 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import { verifyToken } from "@clerk/backend";
 
-// ✅ relative imports so tsx can resolve them without path alias setup
+// ✅ relative imports for ts-node/tsx
 import { adminDb } from "./src/lib/firebase/admin";
 import { createGameTransaction } from "./src/lib/game/start";
 
+const port = Number(process.env.PORT || 3001);
 const httpServer = createServer();
-const io = new Server(httpServer, { cors: { origin: "http://localhost:3000" } });
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined,
+  process.env.FRONTEND_ORIGIN, // optional custom
+].filter(Boolean) as string[];
+
+const io = new Server(httpServer, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+  },
+});
 
 // Auth middleware: require a valid Clerk token before joining
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.clerkToken as string | undefined;
     if (!token) return next(new Error("no token"));
+
     const payload = await verifyToken(token, { secretKey: process.env.CLERK_SECRET_KEY! });
 
     (socket as any).auth = {
-      userId: payload.sub,
+      userId: (payload as any).sub,
       sessionId: (payload as any).sid,
     };
-    next();
-  } catch {
-    next(new Error("invalid token"));
+    return next();
+  } catch (err) {
+    return next(new Error("invalid token"));
   }
 });
 
@@ -53,18 +67,12 @@ io.on("connection", (socket) => {
       ack?: (resp: { ok: boolean; gameId?: string; error?: string }) => void
     ) => {
       try {
-        // 1) normalize payload
         const payloadPlayers = (payload?.players || []).map(String).filter(Boolean);
-
-        // 2) include the caller and dedupe
         const players = Array.from(new Set([auth.userId, ...payloadPlayers]));
-
-        // 3) now validate 2–4
         if (players.length < 2 || players.length > 4) {
           throw new Error("players must be 2–4");
         }
 
-        // 4) create, join, and broadcast
         const gameId = await createGameTransaction(players, auth.userId);
         socket.join(gameId);
 
@@ -91,7 +99,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// start the server once, outside of the connection handler
-httpServer.listen(3001, () => {
-  console.log("WS server listening on http://localhost:3001");
+// start the server
+httpServer.listen(port, "0.0.0.0", () => {
+  console.log(`WS server listening on :${port}`);
 });
