@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { io, Socket } from "socket.io-client";
+import type { Socket } from "socket.io-client";
 import { useAuth } from "@clerk/nextjs";
+import { getSocket } from "@/lib/socket";
 
 type Summary = {
   status: "active" | "paused" | "finished";
@@ -22,15 +23,18 @@ export default function StartTestPage() {
   const { isSignedIn, getToken, userId } = useAuth();
   const socketRef = useRef<Socket | null>(null);
 
-  const [status, setStatus] = useState<"idle"|"connecting"|"connected"|"disconnected">("idle");
-  const [otherPlayers, setOtherPlayers] = useState<string>(""); // comma-separated user IDs
+  const [status, setStatus] =
+    useState<"idle" | "connecting" | "connected" | "disconnected">("idle");
+  const [otherPlayers, setOtherPlayers] = useState<string>("");
   const [gameId, setGameId] = useState<string>("");
   const [summary, setSummary] = useState<Summary | null>(null);
   const [log, setLog] = useState<string>("");
 
-  // Connect once when signed in
   useEffect(() => {
-    if (!isSignedIn) { setStatus("idle"); return; }
+    if (!isSignedIn) {
+      setStatus("idle");
+      return;
+    }
 
     let mounted = true;
     (async () => {
@@ -38,34 +42,42 @@ export default function StartTestPage() {
       const token = await getToken();
       if (!mounted) return;
 
-      const s = io("http://localhost:3001", { auth: { clerkToken: token } });
+      const s = getSocket();
+      s.auth = { clerkToken: token };
+      s.connect();
+
       socketRef.current = s;
-      (window as Window).__socket = s; // handy for console testing
+      (window as any).__socket = s;
 
-      s.on("connect", () => setStatus("connected"));
-      s.on("disconnect", () => setStatus("disconnected"));
-
-      s.on("game_state", (payload: { gameId: string; game: Summary }) => {
+      const onConnect = () => setStatus("connected");
+      const onDisconnect = () => setStatus("disconnected");
+      const onGameState = (payload: { gameId: string; game: Summary }) => {
         setGameId(payload.gameId);
         setSummary(payload.game);
-        setLog((l) => `[state] v${payload.game.version} turn=${payload.game.turn.index}\n` + l);
-      });
-
-      s.on("error_msg", (e: { message: string }) => {
+        setLog(
+          (l) => `[state] v${payload.game.version} turn=${payload.game.turn.index}\n` + l
+        );
+      };
+      const onErrorMsg = (e: { message: string }) => {
         setLog((l) => `[error] ${e.message}\n` + l);
-      });
+      };
+
+      s.on("connect", onConnect);
+      s.on("disconnect", onDisconnect);
+      s.on("game_state", onGameState);
+      s.on("error_msg", onErrorMsg);
+
+      return () => {
+        s.off("connect", onConnect);
+        s.off("disconnect", onDisconnect);
+        s.off("game_state", onGameState);
+        s.off("error_msg", onErrorMsg);
+        s.disconnect();
+      };
     })();
 
     return () => {
       mounted = false;
-      const s = socketRef.current;
-      if (s) {
-        s.off("connect");
-        s.off("disconnect");
-        s.off("game_state");
-        s.off("error_msg");
-        s.disconnect();
-      }
     };
   }, [isSignedIn, getToken]);
 
@@ -73,23 +85,25 @@ export default function StartTestPage() {
     const s = socketRef.current;
     if (!s) return;
 
-    // Parse comma-separated IDs; allow starting with just a fake teammate id.
     const extra = otherPlayers
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean);
 
-    // If user didn’t enter anyone, give a dummy teammate to satisfy "2–4 players".
     const players = extra.length ? extra : ["bot_user_1"];
-    s.emit("start_game", { players }, (resp: { ok: boolean; gameId?: string; error?: string }) => {
-      if (!resp.ok) {
-        setLog((l) => `[start_game failed] ${resp.error}\n` + l);
-        return;
+
+    s.emit(
+      "start_game",
+      { players },
+      (resp: { ok: boolean; gameId?: string; error?: string }) => {
+        if (!resp.ok) {
+          setLog((l) => `[start_game failed] ${resp.error}\n` + l);
+          return;
+        }
+        setLog((l) => `[start_game ok] gameId=${resp.gameId}\n` + l);
+        s.emit("join_game", { gameId: resp.gameId! });
       }
-      setLog((l) => `[start_game ok] gameId=${resp.gameId}\n` + l);
-      // The server will emit "game_state" after creation; we also join explicitly to be safe.
-      s.emit("join_game", { gameId: resp.gameId! });
-    });
+    );
   };
 
   const joinExisting = () => {
@@ -111,7 +125,9 @@ export default function StartTestPage() {
   return (
     <main className="p-6 space-y-4">
       <h1 className="text-xl font-semibold">Start Game (Test)</h1>
-      <p>Status: {status} | You: {userId}</p>
+      <p>
+        Status: {status} | You: {userId}
+      </p>
 
       <div className="space-y-2">
         <label className="block text-sm">Other player IDs (comma-separated)</label>
@@ -121,7 +137,9 @@ export default function StartTestPage() {
           onChange={(e) => setOtherPlayers(e.target.value)}
           placeholder="user_abc,user_def (leave empty to use bot_user_1)"
         />
-        <button onClick={startGame} className="rounded border px-3 py-2">Start game</button>
+        <button onClick={startGame} className="rounded border px-3 py-2">
+          Start game
+        </button>
       </div>
 
       <div className="space-y-2">
@@ -132,7 +150,9 @@ export default function StartTestPage() {
           onChange={(e) => setGameId(e.target.value)}
           placeholder="paste a gameId to join"
         />
-        <button onClick={joinExisting} className="rounded border px-3 py-2">Join existing</button>
+        <button onClick={joinExisting} className="rounded border px-3 py-2">
+          Join existing
+        </button>
       </div>
 
       {summary && (
@@ -140,11 +160,17 @@ export default function StartTestPage() {
           <h2 className="font-semibold">Summary</h2>
           <ul className="list-disc list-inside text-sm">
             <li>players: {summary.players.join(", ")}</li>
-            <li>turn.index: {summary.turn.index} (dir {summary.turn.direction})</li>
+            <li>
+              turn.index: {summary.turn.index} (dir {summary.turn.direction})
+            </li>
             <li>currentColor: {summary.currentColor ?? "—"}</li>
             <li>discardTop: {summary.discardTop?.code ?? "—"}</li>
-            <li>drawCount: {summary.drawCount} | powerDrawCount: {summary.powerDrawCount}</li>
-            <li>pendingDraw: {summary.pendingDraw} | version: {summary.version}</li>
+            <li>
+              drawCount: {summary.drawCount} | powerDrawCount: {summary.powerDrawCount}
+            </li>
+            <li>
+              pendingDraw: {summary.pendingDraw} | version: {summary.version}
+            </li>
             <li>status: {summary.status} | winner: {summary.winner ?? "—"}</li>
           </ul>
         </div>
