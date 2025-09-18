@@ -47,7 +47,7 @@ export default function StartTestPage() {
       s.connect();
 
       socketRef.current = s;
-      (window as any).__socket = s;
+      (window as Window).__socket = s;
 
       const onConnect = () => setStatus("connected");
       const onDisconnect = () => setStatus("disconnected");
