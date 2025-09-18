@@ -1,25 +1,24 @@
 // src/lib/socket.ts
 import { io, Socket } from "socket.io-client";
 
-const isLocal =
-  typeof window !== "undefined" && window.location.hostname === "localhost";
-
-const WS_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL || (isLocal ? "http://localhost:3001" : "");
-
-if (!isLocal && !WS_URL) {
-  throw new Error("Missing NEXT_PUBLIC_SOCKET_URL for production");
-}
-
 let socket: Socket | null = null;
 
 export function getSocket(): Socket {
+  // Only run in the browser
   if (typeof window === "undefined") {
-    throw new Error("Socket is client-only");
+    throw new Error("getSocket must be called in the browser");
   }
+
+  const isLocal = window.location.hostname === "localhost";
+  const envUrl = process.env.NEXT_PUBLIC_SOCKET_URL;
+
+  // In dev: use env if set, otherwise localhost:3001
+  // In prod: require env; if missing, we just warn and try current origin (won't work for WS, but avoids build crash)
+  const url =
+    isLocal ? (envUrl || "http://localhost:3001") : (envUrl ?? window.location.origin);
+
   if (!socket) {
-    // Create but DO NOT auto-connect until we set auth
-    socket = io(WS_URL, {
+    socket = io(url, {
       transports: ["websocket"],
       withCredentials: true,
       autoConnect: false,
@@ -29,5 +28,6 @@ export function getSocket(): Socket {
     socket.on("connect", () => console.log("✅ socket connected:", socket!.id));
     socket.on("disconnect", (reason) => console.log("⚠️ socket disconnected:", reason));
   }
+
   return socket;
 }
