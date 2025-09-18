@@ -10,7 +10,8 @@
     "dev:all": "concurrently \"npm:dev\" \"npm:ws\"",
     "lint": "eslint .",
     "check:env": "tsx scripts/check-env.ts",
-    "test:admin": "tsx scripts/test-admin.ts"
+    "test:admin": "tsx scripts/test-admin.ts",
+    "start:ws": "tsx ws-server.ts"
   },
   "dependencies": {
     "@clerk/backend": "^2.13.0",
@@ -38,7 +39,7 @@
     "nodemon": "^3.1.10",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
-    "tsx": "^4",
+    "tsx": "^4.20.5",
     "typescript": "^5"
   }
 }
